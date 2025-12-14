@@ -1,0 +1,889 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>饼干交易计划记录</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <!-- Load Chart.js for visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fb;
+        }
+        /* 自定义滚动条，增强移动端体验 */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        /* P&L 颜色样式 */
+        .pnl-positive { color: #10b981; } /* 绿色 - 盈利 */
+        .pnl-negative { color: #ef4444; } /* 红色 - 亏损 */
+        .pnl-zero { color: #9ca3af; } /* 灰色 - 零 */
+
+        .summary-header {
+            cursor: pointer;
+            padding: 10px;
+            border-bottom: 1px solid #e5e7eb;
+            transition: background-color 0.2s;
+        }
+        .summary-header:hover {
+            background-color: #f9fafb;
+        }
+        .summary-content {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease-out;
+        }
+        .summary-content.open {
+            max-height: 1000px; /* 足够大的值 */
+            transition: max-height 0.5s ease-in;
+        }
+        .disabled-form button {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
+        .disabled-form input, .disabled-form textarea {
+            pointer-events: none;
+            background-color: #f3f4f6;
+        }
+    </style>
+</head>
+<body class="min-h-screen">
+    <div id="app" class="max-w-xl mx-auto p-4 md:p-6">
+        <!-- 头部 -->
+        <header class="mb-6 pb-4 border-b border-gray-200">
+            <h1 class="3xl font-bold text-gray-800">交易计划与盈亏记录</h1>
+            <p class="text-sm text-gray-500 mt-1" id="user-info">加载用户...</p>
+        </header>
+
+        <!-- 新计划表单 -->
+        <section class="bg-white p-4 rounded-xl shadow-lg mb-8">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">记录新的交易计划</h2>
+            <form id="plan-form" class="space-y-4">
+                <div>
+                    <label for="date" class="block text-sm font-medium text-gray-700">日期</label>
+                    <input type="date" id="date" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border">
+                </div>
+                <div>
+                    <label for="product" class="block text-sm font-medium text-gray-700">交易品种 (例如：螺纹钢, 沪深300)</label>
+                    <input type="text" id="product" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border" placeholder="必填，如: RB, IF, CU">
+                </div>
+                <div>
+                    <label for="plan" class="block text-sm font-medium text-gray-700">操作计划 (例如：观察, 10点若突破压力位则开多)</label>
+                    <textarea id="plan" rows="3" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border"></textarea>
+                </div>
+                <div>
+                    <label for="expected-pnl" class="block text-sm font-medium text-gray-700">预期盈亏金额 (元/人民币, 填0表示观察)</label>
+                    <input type="number" id="expected-pnl" step="0.01" value="0" required class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border">
+                </div>
+                <button type="submit" id="save-plan-btn" class="w-full flex justify-center py-2 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 transition duration-150 ease-in-out">
+                    保存计划
+                </button>
+            </form>
+        </section>
+
+        <!-- 交易数据汇总 -->
+        <section class="mb-8">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700 flex justify-between items-center">
+                交易数据汇总 (已操作)
+                <!-- 新增可视化按钮 -->
+                <button id="show-charts-btn" class="text-sm text-white bg-green-500 hover:bg-green-600 px-3 py-1 rounded-lg transition duration-150 shadow-md disabled:opacity-50" disabled>
+                    📊 可视化分析
+                </button>
+            </h2>
+            <div id="summary-section" class="bg-white rounded-xl shadow-lg">
+                <p class="text-center text-gray-500 p-4" id="summary-message">正在计算汇总...</p>
+            </div>
+        </section>
+
+        <!-- 计划列表 -->
+        <section class="mb-8">
+            <h2 class="text-xl font-semibold mb-4 text-gray-700">我的每日记录</h2>
+            <!-- 筛选日期输入框 -->
+            <div class="mb-4 bg-white p-3 rounded-xl shadow-inner border border-gray-100">
+                <label for="filter-date" class="block text-sm font-medium text-gray-700 mb-2">筛选日期</label>
+                <input type="date" id="filter-date" class="mt-1 block w-full rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border">
+            </div>
+            <!-- /筛选日期输入框 -->
+            <div id="plans-list" class="space-y-4">
+                <p class="text-center text-gray-500" id="loading-message">正在加载记录...</p>
+            </div>
+        </section>
+
+        <!-- 消息提示容器 -->
+        <div id="message-container" class="fixed bottom-4 left-1/2 transform -translate-x-1/2 p-3 bg-red-500 text-white rounded-lg shadow-xl hidden transition-opacity duration-300"></div>
+
+    </div>
+
+    <!-- 可视化模态框 (Modal) -->
+    <div id="chart-modal" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-start justify-center z-50 p-4 hidden">
+        <div class="bg-white w-full max-w-4xl rounded-xl shadow-2xl mt-8 transform transition-all overflow-y-auto max-h-[90vh]">
+            <div class="p-6 border-b border-gray-200 sticky top-0 bg-white z-10 rounded-t-xl flex justify-between items-center">
+                <h3 class="text-2xl font-bold text-gray-800">交易盈亏可视化分析</h3>
+                <button id="close-charts-btn" class="text-gray-500 hover:text-gray-800">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+            </div>
+            <div class="p-6 space-y-8">
+                <!-- 每日盈亏图表 -->
+                <div class="bg-gray-50 p-4 rounded-lg shadow-md">
+                    <h4 class="text-xl font-semibold mb-3 text-gray-700">每日净盈亏趋势 (元)</h4>
+                    <div class="relative h-64 md:h-80">
+                        <canvas id="dailyPnlChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- 按品种盈亏图表 -->
+                <div class="bg-gray-50 p-4 rounded-lg shadow-md">
+                    <h4 class="text-xl font-semibold mb-3 text-gray-700">按品种净盈亏汇总 (元)</h4>
+                    <div class="relative h-64 md:h-80">
+                        <canvas id="productPnlChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase SDKs 和 脚本 -->
+    <script type="module">
+        // 更新 SDK 版本到 12.6.0
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-auth.js";
+        import {
+            getFirestore, collection, query, onSnapshot,
+            doc, addDoc, updateDoc, deleteDoc, serverTimestamp
+        } from "https://www.gstatic.com/firebasejs/12.6.0/firebase-firestore.js";
+
+        // --- 全局变量和配置 (本地硬编码配置) ---
+        // 这是用户提供的 Firebase 配置信息
+        const firebaseConfig = {
+            apiKey: "AIzaSyCIMADKl5WAhyfjTocExy0wmvAwb8FrYqY",
+            authDomain: "qihuo-87146.firebaseapp.com",
+            projectId: "qihuo-87146",
+            storageBucket: "qihuo-87146.firebasestorage.app",
+            messagingSenderId: "373388946324",
+            appId: "1:373388946324:web:5255ea409822fe26127d81",
+            measurementId: "G-Z38SXNHHKC"
+        };
+
+        // 使用 projectId 作为应用 ID
+        const appId = firebaseConfig.projectId;
+
+        let app, db, auth, userId;
+        let isAuthReady = false;
+
+        // 全局状态管理
+        let allPlansCache = [];
+        let currentFilterDate = new Date().toISOString().substring(0, 10);
+
+        // Chart.js 实例变量
+        let dailyChartInstance = null;
+        let productChartInstance = null;
+
+        const plansList = document.getElementById('plans-list');
+        const planForm = document.getElementById('plan-form');
+        const userInfoEl = document.getElementById('user-info');
+        const loadingMessageEl = document.getElementById('loading-message');
+        const messageContainer = document.getElementById('message-container');
+        const summarySection = document.getElementById('summary-section');
+        const summaryMessageEl = document.getElementById('summary-message');
+        const filterDateInput = document.getElementById('filter-date');
+        const savePlanBtn = document.getElementById('save-plan-btn');
+        const showChartsBtn = document.getElementById('show-charts-btn');
+        const chartModal = document.getElementById('chart-modal');
+        const closeChartsBtn = document.getElementById('close-charts-btn');
+
+        // --- 实用函数 ---
+
+        /**
+         * 显示一个短暂的消息提示。
+         * @param {string} message - 消息文本。
+         * @param {string} type - 'success' 或 'error'。
+         */
+        function showMessage(message, type = 'success') {
+            messageContainer.textContent = message;
+            messageContainer.className = `fixed bottom-4 left-1/2 transform -translate-x-1/2 p-3 text-white rounded-lg shadow-xl transition-opacity duration-300 z-50 ${type === 'error' ? 'bg-red-500' : 'bg-green-500'}`;
+            messageContainer.classList.remove('hidden');
+            setTimeout(() => {
+                messageContainer.classList.add('hidden');
+            }, 3000);
+        }
+
+        /**
+         * 格式化盈亏值，并添加颜色和符号。
+         * @param {number} pnl - 盈亏值。
+         * @returns {string} 带有样式盈亏的 HTML 字符串。
+         */
+        function formatPnl(pnl) {
+            const num = parseFloat(pnl);
+            if (isNaN(num)) {
+                return '<span class="text-gray-500">¥ N/A</span>';
+            }
+            if (num === 0) {
+                return '<span class="pnl-zero">¥ 0.00</span>';
+            }
+            const colorClass = num > 0 ? 'pnl-positive' : 'pnl-negative';
+            const sign = num > 0 ? '+' : '';
+            return `<span class="${colorClass} font-semibold">¥ ${sign}${num.toFixed(2)}</span>`;
+        }
+
+        /**
+         * 格式化数量。
+         * @param {number} count - 数量。
+         * @returns {string} 格式化后的数量字符串。
+         */
+        function formatCount(count) {
+            return `<span class="text-gray-600">(${count} 笔)</span>`;
+        }
+
+        /**
+         * 根据连接状态禁用或启用表单。
+         * @param {boolean} disabled - 是否禁用。
+         */
+        function toggleFormDisabled(disabled) {
+            if (disabled) {
+                planForm.classList.add('disabled-form');
+                savePlanBtn.disabled = true;
+                savePlanBtn.textContent = '无法保存 (数据库未连接)';
+            } else {
+                planForm.classList.remove('disabled-form');
+                savePlanBtn.disabled = false;
+                savePlanBtn.textContent = '保存计划';
+            }
+        }
+
+
+        // --- Firebase 初始化和认证 ---
+
+        try {
+            // 尝试使用解析后的配置进行初始化
+            app = initializeApp(firebaseConfig);
+            db = getFirestore(app);
+            auth = getAuth(app);
+
+            // 认证状态监听器
+            onAuthStateChanged(auth, async (user) => {
+                if (user) {
+                    userId = user.uid;
+                    userInfoEl.textContent = `用户ID: ${userId}`;
+                    isAuthReady = true;
+                    console.log("Authentication successful, userId:", userId);
+                    toggleFormDisabled(false); // 启用表单
+                    // 认证完成后开始监听 Firestore 数据
+                    setupRealtimeListener();
+                } else {
+                    // 本地运行时没有自定义 token，直接进行匿名登录
+                    try {
+                        await signInAnonymously(auth);
+                        // onAuthStateChanged 会再次触发，并设置 user/userId
+                    } catch (error) {
+                        console.error("Firebase Auth Error:", error);
+                        // 针对 auth/configuration-not-found 错误提供具体指导
+                        let authErrorMessage = '认证失败，请检查数据库规则。';
+                        if (error.code === 'auth/configuration-not-found') {
+                            authErrorMessage = '认证失败：请在 Firebase 控制台检查 **身份验证** -> **登录方法** 中是否启用了 **匿名登录**。';
+                        }
+
+                        showMessage(authErrorMessage, 'error');
+                        userInfoEl.textContent = '认证失败';
+                        toggleFormDisabled(true); // 认证失败，禁用表单
+                    }
+                }
+            });
+
+        } catch (error) {
+            console.error("Firebase Initialization Error:", error);
+            showMessage('Firebase 初始化失败: 请检查配置和网络连接。', 'error');
+            userInfoEl.textContent = '状态: 初始化失败';
+            loadingMessageEl.innerHTML = '<p class="text-red-500 font-semibold">❌ 初始化失败。请检查配置是否正确。</p>';
+            summarySection.innerHTML = '<p class="text-center text-gray-500 p-4">数据库连接失败。</p>';
+            toggleFormDisabled(true); // 初始化失败，禁用表单
+        }
+
+
+        // --- Firestore 操作 ---
+
+        /**
+         * 获取 Firestore 集合引用。
+         * @returns {object} Collection reference.
+         */
+        function getCollectionRef() {
+            if (!userId) throw new Error("用户未认证。");
+            // 存储路径: /artifacts/{appId}/users/{userId}/futures_plans
+            const path = `/artifacts/${appId}/users/${userId}/futures_plans`;
+            return collection(db, path);
+        }
+
+        /**
+         * 处理保存新计划。
+         */
+        planForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            if (!isAuthReady) {
+                showMessage('数据库未连接或用户认证中，无法保存。', 'error');
+                return;
+            }
+
+            const date = document.getElementById('date').value;
+            const product = document.getElementById('product').value.trim(); // 新增品种字段
+            const plan = document.getElementById('plan').value.trim();
+            const expectedPnl = parseFloat(document.getElementById('expected-pnl').value);
+
+            if (!date || !product || !plan || isNaN(expectedPnl)) {
+                showMessage('请填写所有必填字段。', 'error');
+                return;
+            }
+
+            try {
+                // 新增保存 grossPnl 和 fees 字段，初始为 0
+                await addDoc(getCollectionRef(), {
+                    date: date,
+                    product: product,
+                    plan: plan,
+                    expectedPnl: expectedPnl,
+                    occurred: false,
+                    actualPnl: 0,
+                    grossPnl: 0, // 新增：盈亏（税前/前）
+                    fees: 0,       // 新增：手续费
+                    timestamp: serverTimestamp()
+                });
+
+                showMessage('交易计划保存成功！');
+                planForm.reset();
+                // 为方便起见，将日期预设为今天
+                document.getElementById('date').value = new Date().toISOString().substring(0, 10);
+
+            } catch (error) {
+                console.error("Error adding document: ", error);
+                showMessage('保存计划失败: ' + error.message, 'error');
+            }
+        });
+
+        /**
+         * 更新现有计划（是否操作状态、盈亏、手续费和实际净盈亏）。
+         * @param {string} docId - 要更新的文档 ID。
+         * @param {boolean} occurred - '是否操作' 的新状态。
+         * @param {number} grossPnl - 盈亏（税前/前）。
+         * @param {number} fees - 手续费。
+         * @param {number} actualPnl - 实际净盈亏 (grossPnl - fees)。
+         */
+        async function updatePlan(docId, occurred, grossPnl, fees, actualPnl) {
+            if (!isAuthReady) {
+                showMessage('数据库未连接或用户认证中，无法更新。', 'error');
+                return;
+            }
+            try {
+                const planRef = doc(getCollectionRef(), docId);
+                await updateDoc(planRef, {
+                    occurred: occurred,
+                    grossPnl: grossPnl, // 更新 grossPnl
+                    fees: fees,         // 更新 fees
+                    actualPnl: actualPnl // 更新计算后的净盈亏
+                });
+                showMessage('记录更新成功！');
+            } catch (error) {
+                console.error("Error updating document: ", error);
+                showMessage('更新记录失败: ' + error.message, 'error');
+            }
+        }
+
+        /**
+         * 删除计划记录。
+         * @param {string} docId - 要删除的文档 ID。
+         */
+        async function deletePlan(docId) {
+            if (!isAuthReady) {
+                showMessage('数据库未连接或用户认证中，无法删除。', 'error');
+                return;
+            }
+            // 确保 docId 存在
+            if (!docId) {
+                 console.error("Deletion Error: docId is undefined or empty.");
+                 showMessage('删除失败：记录ID缺失。', 'error');
+                 return;
+            }
+
+            try {
+                const planRef = doc(getCollectionRef(), docId);
+                await deleteDoc(planRef);
+                showMessage('记录删除成功！');
+            } catch (error) {
+                console.error("Error deleting document: ", error);
+                showMessage('删除记录失败: ' + error.message, 'error');
+            }
+        }
+
+        // --- 汇总计算逻辑 (保持不变) ---
+
+        function generateSummaries(plans) {
+            const summaries = {
+                totalSummary: { actualPnl: 0, count: 0 },
+                dailySummary: {},
+                monthlySummary: {},
+                annualSummary: {},
+                productSummary: {}
+            };
+
+            plans.forEach(plan => {
+                if (!plan.occurred) return;
+                // ... (summary calculation logic) ...
+                const pnl = parseFloat(plan.actualPnl || 0);
+                const date = plan.date;
+                const product = (plan.product || '未分类').trim() || '未分类';
+                const year = date.substring(0, 4);
+                const month = date.substring(0, 7);
+
+                summaries.totalSummary.actualPnl += pnl;
+                summaries.totalSummary.count++;
+
+                summaries.dailySummary[date] = summaries.dailySummary[date] || { actualPnl: 0, count: 0 };
+                summaries.dailySummary[date].actualPnl += pnl;
+                summaries.dailySummary[date].count++;
+
+                summaries.monthlySummary[month] = summaries.monthlySummary[month] || { actualPnl: 0, count: 0 };
+                summaries.monthlySummary[month].actualPnl += pnl;
+                summaries.monthlySummary[month].count++;
+
+                summaries.annualSummary[year] = summaries.annualSummary[year] || { actualPnl: 0, count: 0 };
+                summaries.annualSummary[year].actualPnl += pnl;
+                summaries.annualSummary[year].count++;
+
+                summaries.productSummary[product] = summaries.productSummary[product] || { actualPnl: 0, count: 0 };
+                summaries.productSummary[product].actualPnl += pnl;
+                summaries.productSummary[product].count++;
+            });
+
+            return summaries;
+        }
+
+        /**
+         * 渲染汇总数据到界面上。(保持不变)
+         */
+        function renderSummaries(summaries) {
+            const { totalSummary, dailySummary, monthlySummary, annualSummary, productSummary } = summaries;
+
+            if (totalSummary.count === 0) {
+                summarySection.innerHTML = '<p class="text-center text-gray-500 p-4">尚无已操作的记录。</p>';
+                return;
+            }
+
+            // 渲染列表 (每日/每月/每年/品种)
+            const renderList = (data, titleKey) => {
+                const keys = Object.keys(data).sort().reverse();
+                if (keys.length === 0) return '无记录';
+
+                return keys.map(key => `
+                    <div class="flex justify-between items-center py-2 px-3 hover:bg-gray-50 border-b border-gray-100 last:border-b-0">
+                        <span class="text-gray-700 font-medium">${key}</span>
+                        <div class="text-right">
+                            ${formatPnl(data[key].actualPnl)}
+                            ${formatCount(data[key].count)}
+                        </div>
+                    </div>
+                `).join('');
+            };
+
+            // 渲染折叠面板
+            const renderCollapsible = (title, contentHTML, isTotal = false) => {
+                const totalPnl = isTotal ? totalSummary.actualPnl : null;
+
+                const headerContent = isTotal ? `
+                    <div class="flex justify-between items-center w-full">
+                        <span class="text-lg font-bold text-gray-800">总计 (${totalSummary.count} 笔)</span>
+                        <span class="text-lg font-bold">${formatPnl(totalPnl)}</span>
+                    </div>
+                ` : `
+                    <div class="flex justify-between items-center w-full">
+                        <span class="font-medium text-gray-700">${title}</span>
+                        <!-- Arrow icon -->
+                        <svg class="h-4 w-4 text-gray-500 transition-transform duration-300 transform" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clip-rule="evenodd" /></svg>
+                    </div>
+                `;
+
+                return `
+                    <div class="summary-item">
+                        <div class="summary-header flex ${isTotal ? 'bg-indigo-50 border-none rounded-t-xl' : 'bg-white'}" data-target="${title.replace(/\s/g, '-')}-content" ${isTotal ? 'data-is-total="true"' : 'role="button" tabindex="0"'}>
+                            ${headerContent}
+                        </div>
+                        <div id="${title.replace(/\s/g, '-')}-content" class="summary-content ${isTotal ? 'open' : ''} ${isTotal ? 'p-0' : 'p-0'}">
+                            ${isTotal ? '' : contentHTML}
+                        </div>
+                    </div>
+                `;
+            };
+
+            // 构建最终的 HTML 结构
+            let html = '';
+
+            html += renderCollapsible('总计汇总', '', true);
+            html += renderCollapsible('按品种汇总', `<div class="p-2">${renderList(productSummary, 'product')}</div>`);
+            html += renderCollapsible('按年份汇总', `<div class="p-2">${renderList(annualSummary, 'year')}</div>`);
+            html += renderCollapsible('按月份汇总', `<div class="p-2">${renderList(monthlySummary, 'month')}</div>`);
+            html += renderCollapsible('按每日汇总', `<div class="p-2">${renderList(dailySummary, 'date')}</div>`);
+
+            summarySection.innerHTML = html;
+
+            // 添加折叠功能事件监听器
+            summarySection.querySelectorAll('.summary-header').forEach(header => {
+                if (header.dataset.isTotal) return;
+
+                header.addEventListener('click', (e) => {
+                    const targetId = header.dataset.target;
+                    const targetContent = document.getElementById(targetId);
+
+                    const arrow = header.querySelector('svg');
+
+                    if (targetContent.classList.contains('open')) {
+                        targetContent.classList.remove('open');
+                        arrow.style.transform = 'rotate(0deg)';
+                    } else {
+                        summarySection.querySelectorAll('.summary-content.open').forEach(content => {
+                            content.classList.remove('open');
+                        });
+                        summarySection.querySelectorAll('.summary-header svg').forEach(svg => {
+                            svg.style.transform = 'rotate(0deg)';
+                        });
+
+                        targetContent.classList.add('open');
+                        arrow.style.transform = 'rotate(180deg)';
+                    }
+                });
+            });
+
+            const totalContent = document.getElementById('总计汇总-content');
+            if (totalContent) {
+                 totalContent.style.maxHeight = 'none';
+                 totalContent.style.overflow = 'visible';
+                 totalContent.classList.add('open');
+            }
+        }
+
+        /**
+         * 渲染每日和品种盈亏图表。
+         * @param {object} summaries - 汇总数据对象。
+         */
+        function renderCharts(summaries) {
+            const { dailySummary, productSummary } = summaries;
+
+            // ------------------- 每日盈亏图表 (Daily PNL) -------------------
+
+            const dailyLabels = Object.keys(dailySummary).sort();
+            const dailyData = dailyLabels.map(date => dailySummary[date].actualPnl);
+            const dailyColors = dailyData.map(pnl => pnl >= 0 ? '#10b981' : '#ef4444'); // Green for profit, Red for loss
+
+            // 销毁旧实例（如果存在）
+            if (dailyChartInstance) {
+                dailyChartInstance.destroy();
+            }
+
+            dailyChartInstance = new Chart(document.getElementById('dailyPnlChart'), {
+                type: 'bar',
+                data: {
+                    labels: dailyLabels,
+                    datasets: [{
+                        label: '每日净盈亏 (¥)',
+                        data: dailyData,
+                        backgroundColor: dailyColors,
+                        borderColor: dailyColors,
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        title: { display: false }
+                    },
+                    scales: {
+                        y: {
+                            beginAtZero: false,
+                            title: {
+                                display: true,
+                                text: '净盈亏 (¥)'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: '日期'
+                            }
+                        }
+                    }
+                }
+            });
+
+            // ------------------- 按品种盈亏图表 (Product PNL) -------------------
+
+            const productLabels = Object.keys(productSummary).sort();
+            const productData = productLabels.map(product => productSummary[product].actualPnl);
+            const productColors = productData.map(pnl => pnl >= 0 ? '#3b82f6' : '#f97316'); // Blue/Orange colors
+
+            // 销毁旧实例（如果存在）
+            if (productChartInstance) {
+                productChartInstance.destroy();
+            }
+
+            productChartInstance = new Chart(document.getElementById('productPnlChart'), {
+                type: 'doughnut', // Use Doughnut or Pie chart for product breakdown
+                data: {
+                    labels: productLabels,
+                    datasets: [{
+                        label: '总净盈亏 (¥)',
+                        data: productData,
+                        backgroundColor: [
+                            '#3b82f6', '#f97316', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444'
+                        ],
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                        title: {
+                            display: false
+                        }
+                    }
+                }
+            });
+        }
+
+
+        // --- 交易记录渲染和事件监听 ---
+
+        /**
+         * 渲染筛选后的交易记录列表。
+         * @param {Array<object>} plans - 所有交易计划数组。
+         * @param {string} filterDate - YYYY-MM-DD 格式的筛选日期。
+         */
+        function renderPlansList(plans, filterDate) {
+            plansList.innerHTML = '';
+
+            // 1. 筛选数据：只保留匹配筛选日期的记录
+            const filteredPlans = plans.filter(plan => plan.date === filterDate);
+
+            // 2. 排序数据：按时间戳降序排序（最新记录在前）
+            filteredPlans.sort((a, b) => {
+                const timestampA = a.timestamp ? a.timestamp.toMillis() : 0;
+                const timestampB = b.timestamp ? b.timestamp.toMillis() : 0;
+                return timestampB - timestampA;
+            });
+
+            if (filteredPlans.length === 0) {
+                plansList.innerHTML = `<p class="text-center text-gray-500 p-6 bg-white rounded-xl shadow">日期 ${filterDate} 暂无记录。</p>`;
+                return;
+            }
+
+            filteredPlans.forEach((data) => {
+                const docId = data.id;
+                const grossPnl = data.grossPnl || 0;
+                const fees = data.fees || 0;
+
+                const card = document.createElement('div');
+                card.className = `bg-white p-4 rounded-xl shadow-md border-l-4 ${data.occurred ? (data.actualPnl > 0 ? 'border-green-500' : (data.actualPnl < 0 ? 'border-red-500' : 'border-gray-400')) : 'border-blue-400'}`;
+
+                card.innerHTML = `
+                    <div class="flex justify-between items-start mb-3">
+                        <h3 class="text-lg font-bold text-gray-800">${data.date} - ${data.product || '未分类'}</h3>
+                        <button data-id="${docId}" class="delete-btn text-gray-400 hover:text-red-500 transition-colors">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 10-2 0v6a1 1 0 102 0V8z" clip-rule="evenodd" />
+                            </svg>
+                        </button>
+                    </div>
+
+                    <div class="mb-3 text-gray-600">
+                        <strong class="text-gray-800">计划:</strong> ${data.plan}
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4 text-sm mb-4">
+                        <div>
+                            <strong class="text-gray-800">预期盈亏:</strong>
+                            ${formatPnl(data.expectedPnl)}
+                        </div>
+                        <div class="flex items-center">
+                            <strong class="text-gray-800 mr-2">是否操作:</strong>
+                            <input type="checkbox" id="occurred-${docId}" data-id="${docId}" class="occurred-toggle h-4 w-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500">
+                            <label for="occurred-${docId}" class="ml-2 text-gray-700">${data.occurred ? '已执行' : '未执行'}</label>
+                        </div>
+                    </div>
+
+                    <div id="actual-pnl-group-${docId}" class="${data.occurred ? 'block' : 'hidden'} mt-4 pt-3 border-t border-gray-100">
+                        <strong class="text-gray-800">交易结果:</strong>
+                        <div class="space-y-2 mt-1">
+                            <div class="flex items-center">
+                                <label for="gross-pnl-${docId}" class="w-1/3 text-sm text-gray-600">盈亏 (税前/前):</label>
+                                <input type="number" id="gross-pnl-${docId}" value="${grossPnl}" step="0.01" data-id="${docId}" class="gross-pnl-input block w-2/3 rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border text-sm">
+                            </div>
+                            <div class="flex items-center">
+                                <label for="fees-${docId}" class="w-1/3 text-sm text-gray-600">手续费:</label>
+                                <input type="number" id="fees-${docId}" value="${fees}" step="0.01" data-id="${docId}" class="fees-input block w-2/3 rounded-lg border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 p-2 border text-sm">
+                            </div>
+                        </div>
+
+                        <div class="flex justify-between items-center mt-3 pt-2 border-t border-gray-100">
+                            <strong class="text-gray-800 text-sm">实际净盈亏:</strong>
+                            <span id="net-pnl-display-${docId}" class="text-sm">${formatPnl(data.actualPnl)}</span>
+                            <button data-id="${docId}" class="save-pnl-btn flex-shrink-0 bg-indigo-500 hover:bg-indigo-600 text-white font-medium py-2 px-3 rounded-lg text-sm transition-colors">
+                                更新结算
+                            </button>
+                        </div>
+                        <p class="text-xs mt-1 text-gray-500">计算公式: 盈亏 - 手续费</p>
+                    </div>
+                `;
+
+                plansList.appendChild(card);
+
+                const toggle = card.querySelector(`#occurred-${docId}`);
+                if(toggle) {
+                    toggle.checked = data.occurred;
+                }
+            });
+
+            // 3. 重新绑定事件监听器
+            attachPlanListEventListeners();
+        }
+
+        /**
+         * 重新绑定列表项的事件监听器。
+         */
+        function attachPlanListEventListeners() {
+             // 处理“是否操作”切换
+            plansList.querySelectorAll('.occurred-toggle').forEach(toggle => {
+                toggle.addEventListener('change', (e) => {
+                    const docId = e.target.dataset.id;
+                    const occurred = e.target.checked;
+                    const actualPnlGroup = document.getElementById(`actual-pnl-group-${docId}`);
+
+                    const grossPnlInput = document.getElementById(`gross-pnl-${docId}`);
+                    const feesInput = document.getElementById(`fees-${docId}`);
+
+                    if (occurred) {
+                        actualPnlGroup.classList.remove('hidden');
+
+                        const initialGrossPnl = parseFloat(grossPnlInput.value) || 0;
+                        const initialFees = parseFloat(feesInput.value) || 0;
+                        const initialNetPnl = initialGrossPnl - initialFees;
+
+                        updatePlan(docId, occurred, initialGrossPnl, initialFees, initialNetPnl);
+                    } else {
+                        actualPnlGroup.classList.add('hidden');
+                        updatePlan(docId, occurred, 0, 0, 0);
+                    }
+                });
+            });
+
+            // 处理保存实际盈亏按钮点击
+            plansList.querySelectorAll('.save-pnl-btn').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const docId = e.currentTarget.dataset.id;
+
+                    const grossPnlInput = document.getElementById(`gross-pnl-${docId}`);
+                    const feesInput = document.getElementById(`fees-${docId}`);
+
+                    const newGrossPnl = parseFloat(grossPnlInput.value);
+                    const newFees = parseFloat(feesInput.value);
+
+                    if (isNaN(newGrossPnl) || isNaN(newFees)) {
+                        showMessage('盈亏和手续费必须是数字。', 'error');
+                        return;
+                    }
+
+                    const newNetPnl = newGrossPnl - newFees;
+
+                    const toggle = document.getElementById(`occurred-${docId}`);
+
+                    updatePlan(docId, toggle.checked, newGrossPnl, newFees, newNetPnl);
+                });
+            });
+
+            // 处理删除按钮点击
+            plansList.querySelectorAll('.delete-btn').forEach(button => {
+                button.addEventListener('click', (e) => {
+                    const docId = e.currentTarget.dataset.id;
+                    deletePlan(docId);
+                });
+            });
+        }
+
+
+        /**
+         * 设置实时 Firestore 监听器。
+         */
+        function setupRealtimeListener() {
+            if (!db || !userId) return;
+
+            const q = query(getCollectionRef());
+
+            onSnapshot(q, (snapshot) => {
+                loadingMessageEl.classList.add('hidden');
+
+                // 1. 将数据转换为数组并缓存
+                const plans = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                allPlansCache = plans;
+
+                // 2. 计算汇总
+                const summaries = generateSummaries(plans);
+                renderSummaries(summaries); // 渲染汇总部分
+
+                // 3. 启用/禁用可视化按钮并预渲染图表
+                if (summaries.totalSummary.count > 0) {
+                     showChartsBtn.disabled = false;
+                     renderCharts(summaries);
+                } else {
+                     showChartsBtn.disabled = true;
+                }
+
+                // 4. 渲染列表，使用当前筛选日期
+                renderPlansList(allPlansCache, currentFilterDate);
+
+            }, (error) => {
+                console.error("Firestore real-time error:", error);
+                loadingMessageEl.textContent = '加载记录失败。';
+                showMessage('加载记录失败: ' + error.message, 'error');
+            });
+        }
+
+        // --- 筛选日期事件监听器 ---
+        filterDateInput.addEventListener('change', (e) => {
+            currentFilterDate = e.target.value;
+            if (allPlansCache.length > 0) {
+                // 仅更新列表，不需要重新计算汇总
+                renderPlansList(allPlansCache, currentFilterDate);
+            }
+        });
+
+        // --- 可视化按钮事件监听器 ---
+        showChartsBtn.addEventListener('click', () => {
+            // 打开模态框
+            chartModal.classList.remove('hidden');
+            // 确保图表在 modal 尺寸确定后重新绘制 (Chart.js 最佳实践)
+            if (dailyChartInstance) dailyChartInstance.resize();
+            if (productChartInstance) productChartInstance.resize();
+        });
+
+        closeChartsBtn.addEventListener('click', () => {
+            // 关闭模态框
+            chartModal.classList.add('hidden');
+        });
+
+
+        // --- 页面加载时的初始设置 ---
+        window.addEventListener('load', () => {
+            // 预填充日期为今天
+            const today = new Date().toISOString().substring(0, 10);
+            document.getElementById('date').value = today;
+            filterDateInput.value = today; // 初始化筛选日期
+            summaryMessageEl.textContent = '尚无已操作的记录。'; // 初始信息
+        });
+
+    </script>
+</body>
+</html>
